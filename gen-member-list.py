@@ -6,6 +6,7 @@ import base64
 
 from datetime import datetime, timezone
 from subprocess import Popen, PIPE
+import multiprocessing
 
 outfile = 'src/index.stx'
 headers = '''---
@@ -60,10 +61,9 @@ Mastodon 管理员可在后台设置中的“管理-中继-添加新中继”添
 '''
 
 
-USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/109.0 (https://relay.dragon-fly.club)'
+USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64; rv:135.0) Gecko/20100101 Firefox/135.0 (https://relay.dragon-fly.club)'
 
 instance_ids = set()
-
 
 def read_redis_keys():
     cmd = ['/usr/bin/redis-cli']
@@ -103,52 +103,51 @@ def generate_instance_id(page):
 
     return '_'.join(uid)
 
-
-def generate_list():
-    md_list = []
-    md_failed_list =[]
+def execute(line):
     _timeout = 4
+    if not line or 'subscription' not in line:
+        return
+    domain = line.split('subscription:')[-1]
 
-    def sortSecond(val):
-        return val[1]
+    headers = {
+        'User-Agent': USER_AGENT
+    }
 
-    for line in read_redis_keys().split('\n'):
-        if not line or 'subscription' not in line:
-            continue
-        domain = line.split('subscription:')[-1]
-
-        headers = {
-            'User-Agent': USER_AGENT
-        }
-
-        # query server meta
+    # query server meta
+    try:
+        md_line, uid = try_mastodon(headers, domain, _timeout)
+        if uid in instance_ids:
+            logger.info("Skipped duplicate domain %s" % domain)
+            return
+        instance_ids.add(uid)
+        return md_line
+    except Exception as e:
         try:
-            md_line, uid = try_mastodon(headers, domain, _timeout)
-            if uid in instance_ids:
+            md_line, uid = try_misskey(headers, domain, _timeout)
+            if uid and uid in instance_ids:
                 logger.info("Skipped duplicate domain %s" % domain)
-                continue
             instance_ids.add(uid)
-            md_list.append(md_line)
         except Exception as e:
             try:
-                md_line, uid = try_misskey(headers, domain, _timeout)
+                md_line, uid = try_nodeinfo(headers, domain, _timeout)
                 if uid and uid in instance_ids:
                     logger.info("Skipped duplicate domain %s" % domain)
                 instance_ids.add(uid)
             except Exception as e:
-                try:
-                    md_line, uid = try_nodeinfo(headers, domain, _timeout)
-                    if uid and uid in instance_ids:
-                        logger.info("Skipped duplicate domain %s" % domain)
-                    instance_ids.add(uid)
-                except Exception as e:
-                    md_line = '  * [%s](https://%s) | Stats Unavailable' % (domain, domain)
-                    md_failed_list.append(md_line)
-                    logger.warning(e)
-                    continue
-            md_list.append(md_line)
+                md_line = '  * [%s](https://%s) | Stats Unavailable' % (domain, domain)
+                logger.warning(e)
+                return (md_line, 0)
+        return md_line
+
+def generate_list():
+    def sortSecond(val):
+        return val[1]
+
+    pool = multiprocessing.Pool(8)
+    md_list = [x for x in pool.map(execute, read_redis_keys().split('\n')) if x is not None]
+
     md_list.sort(key=sortSecond,reverse=True)
-    return list(map( lambda i: i[0], md_list )) + md_failed_list
+    return list(map( lambda i: i[0], md_list ))
 
 def try_nodeinfo(headers, domain, timeout):
     url = "https://%s/.well-known/nodeinfo" % domain
@@ -188,13 +187,13 @@ def try_nodeinfo(headers, domain, timeout):
     version = nodeinfo["software"]["version"]
     software = nodeinfo["software"]["name"]
     stats = nodeinfo["usage"]
-    favicon = requests.get("https://%s/favicon.ico" % domain, headers=headers, timeout=timeout)
-    if favicon.content:
-        fav_md = '![icon for %s](data:image/x-icon;base64,%s)' % (title, base64.b64encode(favicon.content).decode('utf-8'))
-    else:
-        fav_md = ''
+    #favicon = requests.get("https://%s/favicon.ico" % domain, headers=headers, timeout=timeout)
+    #if favicon.content:
+    #    fav_md = '![icon for %s](data:image/x-icon;base64,%s)' % (title, base64.b64encode(favicon.content).decode('utf-8'))
+    #else:
+    #    fav_md = ''
 
-    md_line = '  * %s %s | [%s](https://%s) | 👥 %s 💬 %s 📌 %s(%s)' % (fav_md, title, domain, domain, stats['users']['total'], stats['localPosts'], software, version)
+    md_line = '  * %s | [%s](https://%s) | 👥 %s 💬 %s 📌 %s(%s)' % (title, domain, domain, stats['users']['total'], stats['localPosts'], software, version)
     return ( md_line, stats['users']['total'] ), uid
     
 def try_mastodon(headers, domain, timeout):
@@ -212,13 +211,13 @@ def try_mastodon(headers, domain, timeout):
         raise "Firefish/Misskey"
         
     stats = page['stats']
-    favicon = requests.get("https://%s/favicon.ico" % domain, headers=headers, timeout=timeout)
-    if favicon.content:
-        fav_md = '![icon for %s](data:image/x-icon;base64,%s)' % (title, base64.b64encode(favicon.content).decode('utf-8'))
-    else:
-        fav_md = ''
+    #favicon = requests.get("https://%s/favicon.ico" % domain, headers=headers, timeout=timeout)
+    #if favicon.content:
+    #    fav_md = '![icon for %s](data:image/x-icon;base64,%s)' % (title, base64.b64encode(favicon.content).decode('utf-8'))
+    #else:
+    #    fav_md = ''
 
-    md_line = '  * %s %s | [%s](https://%s) | 👥 %s 💬 %s 🐘 %s 📌 Mastodon(%s)' % (fav_md, title, domain, domain, stats['user_count'], stats['status_count'], stats['domain_count'], version)
+    md_line = '  * %s | [%s](https://%s) | 👥 %s 💬 %s 🐘 %s 📌 Mastodon(%s)' % (title, domain, domain, stats['user_count'], stats['status_count'], stats['domain_count'], version)
     return ( md_line, stats['user_count'] ), uid
 
 
@@ -234,11 +233,11 @@ def try_misskey(headers, domain, timeout):
     title = meta['name']
     version = meta['version']
 
-    favicon = requests.get("https://%s/favicon.ico" % domain, headers=headers, timeout=timeout)
-    if favicon.content:
-        fav_md = '![icon for %s](data:image/x-icon;base64,%s)' % (title, base64.b64encode(favicon.content).decode('utf-8'))
-    else:
-        fav_md = ''
+    #favicon = requests.get("https://%s/favicon.ico" % domain, headers=headers, timeout=timeout)
+    #if favicon.content:
+    #    fav_md = '![icon for %s](data:image/x-icon;base64,%s)' % (title, base64.b64encode(favicon.content).decode('utf-8'))
+    #else:
+    #    fav_md = ''
 
     url_stats = "https://%s/api/stats" % domain
     resp_stats = requests.post(url_stats, headers=headers, timeout=15)
@@ -247,7 +246,8 @@ def try_misskey(headers, domain, timeout):
         return ( md_line, 0 ), uid
     stats = resp_stats.json()
 
-    md_line = '  * %s %s | [%s](https://%s) | 👥 %s 💬 %s 🐘 %s 📌 Misskey(%s)' % (fav_md, title, domain, domain, stats['originalUsersCount'], stats['originalNotesCount'], stats['instances'], version)
+    #md_line = '  * %s %s | [%s](https://%s) | 👥 %s 💬 %s 🐘 %s 📌 Misskey(%s)' % (fav_md, title, domain, domain, stats['originalUsersCount'], stats['originalNotesCount'], stats['instances'], version)
+    md_line = '  * %s | [%s](https://%s) | 👥 %s 💬 %s 🐘 %s 📌 Misskey(%s)' % (title, domain, domain, stats['originalUsersCount'], stats['originalNotesCount'], stats['instances'], version)
     return ( md_line, stats['originalUsersCount'] ), uid
 
 
@@ -282,7 +282,7 @@ if __name__ == "__main__":
 
 ## 技术细节
 
-本中继后端使用[Activity-Relay](https://github.com/yukimochi/Activity-Relay)，[前端页面](https://github.com/dragonfly-club/dragon-relay)使用Ivy定时生成。
+本中继后端使用[Activity-Relay](https://github.com/yukimochi/Activity-Relay)，[前端页面](https://github.com/dragonfly-club/dragon-relay)使用Ark定时生成。
 
 ## 维护团队
 
