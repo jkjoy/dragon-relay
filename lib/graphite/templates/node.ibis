@@ -2,6 +2,7 @@
 <html>
     <head>
         <meta charset="utf-8">
+        <script defer data-domain="relay.dragon-fly.club" src="https://report.dragoncloud.win/js/script.outbound-links.js"></script>
         <meta http-equiv="X-UA-Compatible" content="IE=edge">
         <meta name="author" content="DragonFly Club">
         <meta name="description" content="DragonRelay是一款中文Activity Pub中继，欢迎各大中文联邦宇宙站点加入🎉">
