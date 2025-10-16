@@ -3,9 +3,10 @@
 import logging
 import requests
 import base64
+import os
+import redis
 
 from datetime import datetime, timezone
-from subprocess import Popen, PIPE
 import multiprocessing
 
 outfile = 'src/index.stx'
@@ -66,10 +67,10 @@ USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64; rv:135.0) Gecko/20100101 Firefox/1
 instance_ids = set()
 
 def read_redis_keys():
-    cmd = ['/usr/bin/redis-cli']
-    cmdin = 'KEYS relay:subscription:*'.encode('utf-8')
-    p = Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE)
-    return p.communicate(input=cmdin)[0].decode('utf-8')
+    redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+    client = redis.from_url(redis_url, decode_responses=True)
+    keys = client.keys('relay:subscription:*')
+    return '\n'.join(keys)
 
 
 def generate_instance_id(page):
